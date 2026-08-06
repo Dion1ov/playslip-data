@@ -1,0 +1,43 @@
+name: Update Michigan draw results
+
+on:
+  schedule:
+    # Times are UTC. Michigan midday draw ~12:59pm ET, evening ~7:29pm ET.
+    # Run a bit after each so results are published.
+    - cron: '30 18 * * *'   # ~2:30pm ET — catches the midday draw
+    - cron: '30 1 * * *'    # ~9:30pm ET — catches the evening draw
+  workflow_dispatch:        # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      - name: Pull latest draws
+        run: node scrape.js
+
+      - name: Commit if changed
+        run: |
+          if [[ -n "$(git status --porcelain data/mi-draws.json)" ]]; then
+            git config user.name  "playslip-bot"
+            git config user.email "actions@github.com"
+            git add data/mi-draws.json
+            git commit -m "Update Michigan draw results ($(date -u +%Y-%m-%d))"
+            git push
+          else
+            echo "No changes to commit."
+          fi
