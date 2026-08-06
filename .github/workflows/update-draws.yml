@@ -2,10 +2,14 @@ name: Update Michigan draw results
 
 on:
   schedule:
-    # Times are UTC. Michigan midday draw ~12:59pm ET, evening ~7:29pm ET.
-    # Run a bit after each so results are published.
-    - cron: '30 18 * * *'   # ~2:30pm ET — catches the midday draw
-    - cron: '30 1 * * *'    # ~9:30pm ET — catches the evening draw
+    # GitHub cron is UTC only and does NOT follow daylight saving, so each
+    # target time is listed twice — once for EDT (UTC-4), once for EST (UTC-5).
+    # Michigan posts midday results ~1:15-1:30pm ET, evening ~7:45-8pm ET.
+    # Runs that find nothing new exit in seconds and cost nothing.
+    - cron: '35 17 * * *'   # 1:35pm EDT  (12:35pm EST)
+    - cron: '35 18 * * *'   # 2:35pm EDT  ( 1:35pm EST)  — EST catch-up / EDT retry
+    - cron: '5 0 * * *'     # 8:05pm EDT  ( 7:05pm EST)
+    - cron: '5 1 * * *'     # 9:05pm EDT  ( 8:05pm EST)  — EST catch-up / EDT retry
   workflow_dispatch:        # lets you run it by hand from the Actions tab
 
 permissions:
