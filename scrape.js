@@ -269,7 +269,10 @@ async function pullRange(page, start, end) {
     .sort()
     .pop();
 
-  data.generated = new Date().toISOString().slice(0, 10);
+  // Stamp in Michigan time. The runner is UTC, so an evening run would
+  // otherwise be dated tomorrow.
+  data.generated = new Date()
+    .toLocaleDateString('en-CA', { timeZone: 'America/Detroit' });
   data.coverage = `2010-01-01 to ${newest}`;
   fs.writeFileSync(DATA_PATH, JSON.stringify(data));
   console.log(`Wrote ${added} new draws. Latest draw: ${newest}`);
