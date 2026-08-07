@@ -45,6 +45,59 @@ function fmt(d) {
   return `${mm}/${dd}/${d.getFullYear()}`;
 }
 
+/**
+ * Same-day results.
+ *
+ * The Past Results export lags: it does not include the current day's drawings.
+ * Verified Aug 6 2026 — the export ended at Aug 5 while Daily 3 had already
+ * drawn 162 (midday) and 524 (evening) that day. A lottery app that's a day
+ * behind is useless on the day it matters, so we also read each game's own
+ * page, which posts results within minutes of the drawing.
+ *
+ * The export still does the heavy lifting (backfill, corrections). This pass
+ * only adds today.
+ */
+const TODAY_PAGES = [
+  { url: 'https://www.michiganlottery.com/games/daily-3', mid: 'd3m', eve: 'd3e', digits: 3 },
+  { url: 'https://www.michiganlottery.com/games/daily-4', mid: 'd4m', eve: 'd4e', digits: 4 },
+];
+
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+/** "Thu, Aug 6" → "2026-08-06", using Michigan's date to pick the year. */
+function parseShownDate(text, nowET) {
+  const m = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+(\w{3})\w*\s+(\d{1,2})$/.exec(text.trim());
+  if (!m) return null;
+  const month = MONTHS.indexOf(m[1]);
+  if (month < 0) return null;
+  let year = nowET.getFullYear();
+  // Around New Year the page may still show December while we've ticked over.
+  if (month === 11 && nowET.getMonth() === 0) year -= 1;
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(Number(m[2])).padStart(2, '0')}`;
+}
+
+/** Reads today's midday/evening digits off a game page. */
+async function pullToday(page, cfg) {
+  await page.goto(cfg.url, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(5000);
+  return page.evaluate(() => {
+    const out = { date: null, midday: null, evening: null };
+    const dateEl = [...document.querySelectorAll('*')].find(
+      (e) => e.children.length === 0 &&
+        /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+\w+\s+\d+$/.test(e.textContent.trim()),
+    );
+    out.date = dateEl ? dateEl.textContent.trim() : null;
+    for (const key of ['midday', 'evening']) {
+      const el = document.querySelector(`[aria-label*="${key} drawing results" i]`);
+      if (!el) continue;
+      // Text arrives as "162MID" / "6464EVE" — keep the leading digits only.
+      const digits = (el.textContent.match(/^\d+/) || [])[0] || null;
+      out[key] = digits;
+    }
+    return out;
+  });
+}
+
 /** Digit games — digits stored with separators stripped ('9,0,2' → '902'). */
 function parseCsv(csv) {
   const rows = [];
@@ -172,6 +225,35 @@ async function pullRange(page, start, end) {
       }
     } catch (err) {
       console.error(`${bg.label}: FAILED — ${err.message}`);
+    }
+  }
+
+  // ── Today's drawings, straight off each game page ──────────────────────────
+  const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Detroit' }));
+  for (const cfg of TODAY_PAGES) {
+    try {
+      const today = await pullToday(page, cfg);
+      const dateISO = today.date ? parseShownDate(today.date, nowET) : null;
+      if (!dateISO) {
+        console.log(`${cfg.mid}/${cfg.eve}: could not read today's date ("${today.date}")`);
+        continue;
+      }
+
+      for (const [slot, key] of [['midday', cfg.mid], ['evening', cfg.eve]]) {
+        const digits = today[slot];
+        // "Results Pending" before a drawing — nothing to record yet.
+        if (!digits || digits.length !== cfg.digits) continue;
+
+        const existing = data.streams[key] || [];
+        if (existing.some((r) => r[0] === dateISO)) continue;
+
+        data.streams[key] = [[dateISO, digits], ...existing];
+        added += 1;
+        console.log(`${key}: +1 from game page (${dateISO} ${digits})`);
+      }
+    } catch (err) {
+      // Best effort — the export pass already ran, so this never blocks a commit.
+      console.error(`${cfg.url}: same-day pass failed — ${err.message}`);
     }
   }
 
