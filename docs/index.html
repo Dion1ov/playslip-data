@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlaySlip — Lottery numbers, organized</title>
+<meta name="description" content="PlaySlip is a clean lottery number generator and organizer. Look up any number's real draw history, save the numbers you play, and check results.">
+<style>
+  :root { --bg:#F7F9FB; --surface:#fff; --border:#E2E8EC; --text:#16232B;
+          --muted:#51626D; --teal:#0E9488; --tealsoft:#E4F5F3; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:720px; margin:0 auto; padding:64px 22px 72px; }
+  .brand { font-size:44px; font-weight:800; letter-spacing:-1px; margin:0; }
+  .tag { color:var(--muted); font-size:19px; margin:8px 0 0; }
+  .grid { display:grid; gap:14px; margin:40px 0 8px; }
+  @media (min-width:560px) { .grid { grid-template-columns:1fr 1fr; } }
+  .card { background:var(--surface); border:1px solid var(--border);
+          border-radius:14px; padding:20px 22px; }
+  .card h2 { font-size:17px; margin:0 0 6px; }
+  .card p { margin:0; color:#243441; font-size:15px; }
+  .callout { background:var(--tealsoft); border:1px solid #BFE5E1; border-radius:14px;
+             padding:18px 20px; margin:32px 0 0; }
+  .callout p { margin:0; font-size:15px; }
+  a { color:var(--teal); }
+  footer { margin-top:44px; padding-top:22px; border-top:1px solid var(--border);
+           color:var(--muted); font-size:14px; }
+  footer a { margin-right:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="brand">PlaySlip</p>
+  <p class="tag">Lottery numbers, organized.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Latest results, first thing</h2>
+      <p>Choose which games appear on your home screen and see the newest drawings the
+      moment you open the app.</p>
+    </div>
+    <div class="card">
+      <h2>Number lookup</h2>
+      <p>Type a number and see what it has really done — straight and boxed hits, when
+      it last fell, midday versus evening, across 16 years of results.</p>
+    </div>
+    <div class="card">
+      <h2>My Lines</h2>
+      <p>Save the numbers you play, tag how you play them, and log every play.</p>
+    </div>
+    <div class="card">
+      <h2>Private by default</h2>
+      <p>No account, no ads, no tracking. Your numbers stay on your device.</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <p>Every combination has exactly the same chance in every drawing. PlaySlip
+    organizes your play and shows you published data — it does not predict results and
+    does not promise wins. It does not sell tickets or accept wagers. Play responsibly;
+    confidential help is available at <strong>1-800-GAMBLER</strong>.</p>
+  </div>
+
+  <footer>
+    <a href="./support.html">Support</a>
+    <a href="./privacy.html">Privacy Policy</a>
+    <a href="mailto:dion1ov@icloud.com">Contact</a>
+    <div style="margin-top:10px">© 2026 Hamatory Entertainment</div>
+  </footer>
+
+</div>
+</body>
+</html>
