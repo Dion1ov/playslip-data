@@ -6,7 +6,8 @@
  * through by hand), pulls the last 60 days for each daily-game stream, merges
  * the new draws into data/mi-draws.json, and commits only if something changed.
  *
- * Streams: d3m / d3e / d4m / d4e  (+ d5m / d5e once Daily 5 launches Aug 28, 2026)
+ * Streams: d3m / d3e / d4m / d4e / d5m / d5e
+ * (Daily 5 launched 2026-08-24, ahead of its announced Aug 28 date.)
  */
 
 const fs = require('fs');
@@ -25,9 +26,13 @@ const STREAMS = [
   { key: 'd3e', label: 'Daily 3 Evening' },
   { key: 'd4m', label: 'Daily 4 Midday' },
   { key: 'd4e', label: 'Daily 4 Evening' },
-  // Daily 5 launches 2026-08-28. Uncomment once the game appears in the dropdown.
-  // { key: 'd5m', label: 'Daily 5 Midday' },
-  // { key: 'd5e', label: 'Daily 5 Evening' },
+  // Daily 5 actually launched 2026-08-24, four days ahead of the announced
+  // Aug 28 date. Enabled the same day so history accumulates from draw one.
+  // If Michigan has not yet added it to the Past Results dropdown these two
+  // log "FAILED" and are skipped — the per-stream try/catch below keeps
+  // Daily 3 / Daily 4 unaffected. Harmless to leave enabled either way.
+  { key: 'd5m', label: 'Daily 5 Midday' },
+  { key: 'd5e', label: 'Daily 5 Evening' },
 ];
 
 /**
@@ -60,6 +65,7 @@ function fmt(d) {
 const TODAY_PAGES = [
   { url: 'https://www.michiganlottery.com/games/daily-3', mid: 'd3m', eve: 'd3e', digits: 3 },
   { url: 'https://www.michiganlottery.com/games/daily-4', mid: 'd4m', eve: 'd4e', digits: 4 },
+  { url: 'https://www.michiganlottery.com/games/daily-5', mid: 'd5m', eve: 'd5e', digits: 5 },
 ];
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
