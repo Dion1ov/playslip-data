@@ -15,6 +15,13 @@ on:
 permissions:
   contents: write
 
+# Two runs pushing to main at once causes a non-fast-forward rejection and the
+# scraped draws are lost. Serialize instead: a queued run waits for the active
+# one rather than racing it.
+concurrency:
+  group: update-draws
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -41,7 +48,23 @@ jobs:
             git config user.email "actions@github.com"
             git add data/mi-draws.json
             git commit -m "Update Michigan draw results ($(date -u +%Y-%m-%d))"
-            git push
+
+            # The scrape takes ~3 minutes. If anything else pushed to main in
+            # that window, a plain `git push` is rejected non-fast-forward and
+            # the draws we just collected are discarded. Rebase onto whatever
+            # landed, then retry a few times before giving up.
+            for attempt in 1 2 3; do
+              if git push; then
+                echo "Pushed on attempt $attempt."
+                exit 0
+              fi
+              echo "Push rejected (attempt $attempt) — rebasing onto origin/main."
+              git pull --rebase --autostash origin main || exit 1
+              sleep 5
+            done
+
+            echo "Could not push after 3 attempts."
+            exit 1
           else
             echo "No changes to commit."
           fi
