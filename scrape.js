@@ -100,8 +100,46 @@ async function pullToday(page, cfg) {
       const digits = (el.textContent.match(/^\d+/) || [])[0] || null;
       out[key] = digits;
     }
+
+    // Winners per bet type. Each game page carries a "WIN CONDITIONS /
+    // WINNERS / PRIZE" table for the midday and the evening drawing, under a
+    // "The following are the results from: Monday, October 26th 2026" line.
+    // Verified on Daily 3 / 4 / 5 pages 2026-10-27.
+    out.winnersFrom = null;
+    out.winners = { midday: null, evening: null };
+    const rf = [...document.querySelectorAll('*')].find(
+      (e) => e.children.length === 0 && /results from:/i.test(e.textContent),
+    );
+    if (rf) out.winnersFrom = rf.textContent.split(/results from:/i)[1].trim();
+    for (const table of document.querySelectorAll('table')) {
+      const head = ((table.querySelector('tr') || {}).innerText || '').toUpperCase();
+      if (!head.includes('WINNERS')) continue;
+      const labelEl = table.parentElement && table.parentElement.previousElementSibling;
+      const label = ((labelEl && labelEl.textContent) || '').trim().toLowerCase();
+      const slot = label.startsWith('midday') ? 'midday' : label.startsWith('evening') ? 'evening' : null;
+      if (!slot) continue;
+      const tiers = [];
+      for (const tr of [...table.querySelectorAll('tr')].slice(1)) {
+        const cells = [...tr.querySelectorAll('td,th')].map((c) => c.innerText.trim());
+        if (cells.length < 3 || !cells[0]) continue;
+        const winners = Number(cells[1].replace(/[^\d]/g, ''));
+        const prize = Number(cells[2].replace(/[^\d.]/g, ''));
+        if (!Number.isFinite(winners) || cells[1] === '') continue;
+        tiers.push([cells[0], winners, Number.isFinite(prize) ? prize : 0]);
+      }
+      out.winners[slot] = tiers;
+    }
     return out;
   });
+}
+
+/** "Monday, October 26th 2026" → "2026-10-26". */
+function parseWinnersDate(text) {
+  const m = /(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})/i.exec(text || '');
+  if (!m) return null;
+  const month = ['january','february','march','april','may','june','july','august','september','october','november','december']
+    .indexOf(m[1].toLowerCase());
+  return `${m[3]}-${String(month + 1).padStart(2, '0')}-${String(Number(m[2])).padStart(2, '0')}`;
 }
 
 /** Digit games — digits stored with separators stripped ('9,0,2' → '902'). */
@@ -236,6 +274,7 @@ async function pullRange(page, start, end) {
 
   // ── Today's drawings, straight off each game page ──────────────────────────
   const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Detroit' }));
+  let winnersChanged = false;
   for (const cfg of TODAY_PAGES) {
     try {
       const today = await pullToday(page, cfg);
@@ -257,6 +296,29 @@ async function pullRange(page, start, end) {
         added += 1;
         console.log(`${key}: +1 from game page (${dateISO} ${digits})`);
       }
+
+      // Winner counts — only the most recent drawing per stream is kept.
+      // A table that totals 0 is a drawing that hasn't happened yet (or
+      // hasn't been tallied), so it never overwrites the last real one.
+      const winnersISO = parseWinnersDate(today.winnersFrom);
+      if (winnersISO) {
+        data.winners = data.winners || {};
+        for (const [slot, key] of [['midday', cfg.mid], ['evening', cfg.eve]]) {
+          const tiers = today.winners && today.winners[slot];
+          if (!tiers || !tiers.length) continue;
+          const total = tiers.reduce((n, t) => n + t[1], 0);
+          if (total === 0) continue;
+          const prev = data.winners[key];
+          const next = { date: winnersISO, total, tiers };
+          if (prev && JSON.stringify(prev) === JSON.stringify(next)) continue;
+          if (prev && prev.date > winnersISO) continue;
+          data.winners[key] = next;
+          winnersChanged = true;
+          console.log(`${key}: winners for ${winnersISO} — ${total} total`);
+        }
+      } else {
+        console.log(`${cfg.mid}/${cfg.eve}: no winners table read ("${today.winnersFrom}")`);
+      }
     } catch (err) {
       // Best effort — the export pass already ran, so this never blocks a commit.
       console.error(`${cfg.url}: same-day pass failed — ${err.message}`);
@@ -265,8 +327,8 @@ async function pullRange(page, start, end) {
 
   await browser.close();
 
-  if (added === 0) {
-    console.log('No new draws. Nothing to commit.');
+  if (added === 0 && !winnersChanged) {
+    console.log('No new draws or winner counts. Nothing to commit.');
     process.exit(0);
   }
 
@@ -281,7 +343,7 @@ async function pullRange(page, start, end) {
     .toLocaleDateString('en-CA', { timeZone: 'America/Detroit' });
   data.coverage = `2010-01-01 to ${newest}`;
   fs.writeFileSync(DATA_PATH, JSON.stringify(data));
-  console.log(`Wrote ${added} new draws. Latest draw: ${newest}`);
+  console.log(`Wrote ${added} new draws${winnersChanged ? ' + winner counts' : ''}. Latest draw: ${newest}`);
 })().catch((err) => {
   console.error('Updater failed:', err);
   process.exit(1);
