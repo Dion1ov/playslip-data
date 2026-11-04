@@ -216,6 +216,85 @@ async function pullRange(page, start, end) {
   await page.waitForTimeout(4000);
 
   let added = 0;
+  // ── Today's drawings, straight off each game page ──────────────────────────
+  const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Detroit' }));
+  let winnersChanged = false;
+  async function sameDayPass() {
+    for (const cfg of TODAY_PAGES) {
+      try {
+        const today = await pullToday(page, cfg);
+        const dateISO = today.date ? parseShownDate(today.date, nowET) : null;
+        if (!dateISO) {
+          console.log(`${cfg.mid}/${cfg.eve}: could not read today's date ("${today.date}")`);
+          continue;
+        }
+
+        for (const [slot, key] of [['midday', cfg.mid], ['evening', cfg.eve]]) {
+          const digits = today[slot];
+          // "Results Pending" before a drawing — nothing to record yet.
+          if (!digits || digits.length !== cfg.digits) continue;
+
+          const existing = data.streams[key] || [];
+          if (existing.some((r) => r[0] === dateISO)) continue;
+
+          data.streams[key] = [[dateISO, digits], ...existing];
+          added += 1;
+          console.log(`${key}: +1 from game page (${dateISO} ${digits})`);
+        }
+
+        // Winner counts — only the most recent drawing per stream is kept.
+        // A table that totals 0 is a drawing that hasn't happened yet (or
+        // hasn't been tallied), so it never overwrites the last real one.
+        const winnersISO = parseWinnersDate(today.winnersFrom);
+        if (winnersISO) {
+          data.winners = data.winners || {};
+          for (const [slot, key] of [['midday', cfg.mid], ['evening', cfg.eve]]) {
+            const tiers = today.winners && today.winners[slot];
+            if (!tiers || !tiers.length) continue;
+            const total = tiers.reduce((n, t) => n + t[1], 0);
+            if (total === 0) continue;
+            const prev = data.winners[key];
+            const next = { date: winnersISO, total, tiers };
+            if (prev && JSON.stringify(prev) === JSON.stringify(next)) continue;
+            if (prev && prev.date > winnersISO) continue;
+            data.winners[key] = next;
+            winnersChanged = true;
+            console.log(`${key}: winners for ${winnersISO} — ${total} total`);
+          }
+        } else {
+          console.log(`${cfg.mid}/${cfg.eve}: no winners table read ("${today.winnersFrom}")`);
+        }
+      } catch (err) {
+        // Best effort — the export pass already ran, so this never blocks a commit.
+        console.error(`${cfg.url}: same-day pass failed — ${err.message}`);
+      }
+    }
+  }
+
+
+  // ── WATCH mode (dispatch with client_payload.watch) ─────────────────────────
+  // Started right after a drawing. Skips the slow 60-day export and re-reads
+  // the three game pages every 45 s until today's drawing (Daily 3 + Daily 4)
+  // shows up, then saves at once — results land within a minute of Michigan
+  // posting them instead of at the next 20-minute dispatch. Gives up after
+  // 35 min; the regular backup dispatch still runs the full pass later.
+  const WATCH = process.env.WATCH === '1';
+  if (WATCH) {
+    const todayISO = nowET.toLocaleDateString('en-CA');
+    const slot = nowET.getHours() < 17 ? 'midday' : 'evening';
+    const keys = slot === 'midday' ? ['d3m', 'd4m'] : ['d3e', 'd4e'];
+    const have = () => keys.every((k) => (data.streams[k] || []).some((r) => r[0] === todayISO));
+    const deadline = Date.now() + 35 * 60 * 1000;
+    console.log(`WATCH: waiting for ${todayISO} ${slot}`);
+    await sameDayPass();
+    while (!have() && Date.now() < deadline) {
+      await page.waitForTimeout(45000);
+      await sameDayPass();
+    }
+    console.log(have() ? `WATCH: ${slot} found` : 'WATCH: gave up waiting');
+  }
+
+  if (!WATCH) {
 
   for (const stream of STREAMS) {
     try {
@@ -272,57 +351,7 @@ async function pullRange(page, start, end) {
     }
   }
 
-  // ── Today's drawings, straight off each game page ──────────────────────────
-  const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Detroit' }));
-  let winnersChanged = false;
-  for (const cfg of TODAY_PAGES) {
-    try {
-      const today = await pullToday(page, cfg);
-      const dateISO = today.date ? parseShownDate(today.date, nowET) : null;
-      if (!dateISO) {
-        console.log(`${cfg.mid}/${cfg.eve}: could not read today's date ("${today.date}")`);
-        continue;
-      }
-
-      for (const [slot, key] of [['midday', cfg.mid], ['evening', cfg.eve]]) {
-        const digits = today[slot];
-        // "Results Pending" before a drawing — nothing to record yet.
-        if (!digits || digits.length !== cfg.digits) continue;
-
-        const existing = data.streams[key] || [];
-        if (existing.some((r) => r[0] === dateISO)) continue;
-
-        data.streams[key] = [[dateISO, digits], ...existing];
-        added += 1;
-        console.log(`${key}: +1 from game page (${dateISO} ${digits})`);
-      }
-
-      // Winner counts — only the most recent drawing per stream is kept.
-      // A table that totals 0 is a drawing that hasn't happened yet (or
-      // hasn't been tallied), so it never overwrites the last real one.
-      const winnersISO = parseWinnersDate(today.winnersFrom);
-      if (winnersISO) {
-        data.winners = data.winners || {};
-        for (const [slot, key] of [['midday', cfg.mid], ['evening', cfg.eve]]) {
-          const tiers = today.winners && today.winners[slot];
-          if (!tiers || !tiers.length) continue;
-          const total = tiers.reduce((n, t) => n + t[1], 0);
-          if (total === 0) continue;
-          const prev = data.winners[key];
-          const next = { date: winnersISO, total, tiers };
-          if (prev && JSON.stringify(prev) === JSON.stringify(next)) continue;
-          if (prev && prev.date > winnersISO) continue;
-          data.winners[key] = next;
-          winnersChanged = true;
-          console.log(`${key}: winners for ${winnersISO} — ${total} total`);
-        }
-      } else {
-        console.log(`${cfg.mid}/${cfg.eve}: no winners table read ("${today.winnersFrom}")`);
-      }
-    } catch (err) {
-      // Best effort — the export pass already ran, so this never blocks a commit.
-      console.error(`${cfg.url}: same-day pass failed — ${err.message}`);
-    }
+  await sameDayPass();
   }
 
   await browser.close();
