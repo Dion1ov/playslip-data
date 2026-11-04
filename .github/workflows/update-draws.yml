@@ -33,6 +33,8 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    # A watch run waits up to 35 min for the drawing to post.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -48,6 +50,11 @@ jobs:
 
       - name: Pull latest draws
         run: node scrape.js
+        env:
+          # cron-job.org's right-after-the-drawing jobs send
+          # {"event_type":"scrape","client_payload":{"watch":true}} — the bot
+          # then polls the game pages every 45 s until the numbers post.
+          WATCH: ${{ github.event.client_payload.watch && '1' || '' }}
 
       - name: Commit if changed
         run: |
