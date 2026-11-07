@@ -36,22 +36,23 @@
   </header>
 
   <h1>Privacy Policy</h1>
-  <p class="date">Effective August 6, 2026</p>
+  <p class="date">Effective November 7, 2026</p>
 
   <div class="callout">
     <p><strong>PlaySlip does not collect your personal information.</strong> There is no
     account to create, no analytics, no advertising, and no tracking of any kind. The
-    numbers you save stay on your device.</p>
+    numbers you save stay on your device, unless you choose to turn on Winner alerts
+    (explained below).</p>
   </div>
 
   <h2>Information we collect</h2>
   <p>None. PlaySlip has no sign-up, no login, and no user profile. We do not ask for
   your name, email address, phone number, location, contacts, photos, or payment
-  details, and we operate no server that stores anything about you.</p>
+  details. The only things that ever leave your phone are the optional alert details
+  described under <a href="#alerts">Alerts</a>, and only if you turn alerts on.</p>
 
   <h2>Information stored on your device</h2>
-  <p>Everything you create in PlaySlip is saved locally on your iPhone and never
-  leaves it. That includes:</p>
+  <p>Everything you create in PlaySlip is saved locally on your iPhone. That includes:</p>
   <ul>
     <li>Number sets you save to My Lines, and the bet type you tag them with</li>
     <li>Dates you log as having played a line</li>
@@ -62,7 +63,23 @@
         function that produces a repeatable set of numbers. They are not transmitted
         anywhere.</li>
   </ul>
-  <p>Deleting the app removes all of it. We cannot recover it, because we never had it.</p>
+  <p>Deleting the app removes all of it from your phone.</p>
+
+  <h2 id="alerts">Alerts (optional)</h2>
+  <p><strong>Results alerts.</strong> If you turn on alerts, your iPhone gives PlaySlip a
+  push notification address so we can send you the Michigan numbers after each drawing.
+  That address identifies your phone to Apple's notification service only. It is not
+  linked to your name, Apple ID or anything else. Turn alerts off in the app (or in
+  iPhone Settings) and the address stops being used.</p>
+  <p><strong>Winner alerts.</strong> If you also turn on Winner alerts in My Lines,
+  PlaySlip sends a copy of your saved Daily 3, Daily 4 and Daily 5 lines to our server:
+  each number, which game, how you play it (for example Straight or 2-Way) and when you
+  saved it. They are stored with your push address only, so we can check them the moment
+  new results post and alert you if one hits. They are not linked to your identity, not
+  used for advertising or tracking, and never sold or shared. Turning Winner alerts or
+  all alerts off deletes that copy from our server.</p>
+  <p>Alert details are stored with Supabase, our database host, and notifications are
+  delivered through Expo and Apple Push Notification service.</p>
 
   <h2>Network requests the app makes</h2>
   <p>PlaySlip downloads published lottery draw results so it can show current numbers.
