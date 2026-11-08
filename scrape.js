@@ -8,6 +8,9 @@
  *
  * Streams: d3m / d3e / d4m / d4e / d5m / d5e
  * (Daily 5 launched 2026-08-24, ahead of its announced Aug 28 date.)
+ * Ball games: f5 / f5d / l47 / l47d from the same Michigan export, and
+ * pb (Powerball) / mm (Mega Millions) full history from New York State
+ * Open Data, stored as [date, "n,n,n,n,n+bonus"].
  */
 
 const fs = require('fs');
@@ -43,6 +46,48 @@ const BALL_GAMES = [
   { label: 'Fantasy 5', regular: 'f5', double: 'f5d' },
   { label: 'Lotto 47', regular: 'l47', double: 'l47d' },
 ];
+
+
+/**
+ * Powerball and Mega Millions full history from New York State Open Data
+ * (the national results). Small enough to pull whole every run, so it is
+ * always complete and self-healing. Rows: [date, "n,n,n,n,n+bonus"], newest first.
+ */
+const NATIONAL = [
+  { key: 'pb', url: 'https://data.ny.gov/resource/d6yy-54nr.json?$limit=50000&$order=draw_date%20DESC',
+    parse: (r) => { const p = String(r.winning_numbers || '').trim().split(/\s+/).map(Number);
+      return p.length >= 6 && !p.some(Number.isNaN) ? `${p.slice(0, 5).join(',')}+${p[5]}` : null; } },
+  { key: 'mm', url: 'https://data.ny.gov/resource/5xaw-6ayf.json?$limit=50000&$order=draw_date%20DESC',
+    parse: (r) => { const p = String(r.winning_numbers || '').trim().split(/\s+/).map(Number); const b = Number(r.mega_ball);
+      return p.length >= 5 && !p.slice(0, 5).some(Number.isNaN) && !Number.isNaN(b) ? `${p.slice(0, 5).join(',')}+${b}` : null; } },
+];
+
+async function pullNational(data) {
+  let added = 0;
+  for (const g of NATIONAL) {
+    try {
+      const res = await fetch(g.url, { headers: { Accept: 'application/json' } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const rows = (await res.json())
+        .map((r) => [String(r.draw_date || '').slice(0, 10), g.parse(r)])
+        .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r[0]) && r[1]);
+      if (rows.length < 100) throw new Error(`only ${rows.length} rows`);
+      const existing = data.streams[g.key] || [];
+      const before = new Set(existing.map((r) => `${r[0]}|${r[1]}`));
+      const fresh = rows.filter((r) => !before.has(`${r[0]}|${r[1]}`)).length;
+      if (fresh || existing.length !== rows.length) {
+        data.streams[g.key] = rows.sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0));
+        added += fresh || 1;
+        console.log(`${g.key}: ${rows.length} drawings (+${fresh} new)`);
+      } else {
+        console.log(`${g.key}: up to date (${rows.length})`);
+      }
+    } catch (err) {
+      console.error(`${g.key}: FAILED — ${err.message}`);
+    }
+  }
+  return added;
+}
 
 function fmt(d) {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -353,6 +398,10 @@ async function pullRange(page, start, end) {
 
   await sameDayPass();
   }
+
+  // Powerball / Mega Millions (not on the Michigan export). Skipped in watch
+  // mode so the Daily 3/4 alert path stays fast.
+  if (!WATCH) added += await pullNational(data);
 
   await browser.close();
 
