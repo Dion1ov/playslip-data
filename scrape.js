@@ -43,8 +43,8 @@ const STREAMS = [
  * by the "Drawing Type" column. CSV = "Draw Date","Winning Numbers","Drawing Type"
  */
 const BALL_GAMES = [
-  { label: 'Fantasy 5', regular: 'f5', double: 'f5d' },
-  { label: 'Lotto 47', regular: 'l47', double: 'l47d' },
+  { label: 'Fantasy 5', regular: 'f5', double: 'f5d', size: 5 },
+  { label: 'Lotto 47', regular: 'l47', double: 'l47d', size: 6 },
 ];
 
 
@@ -198,13 +198,19 @@ function parseCsv(csv) {
   return rows;
 }
 
-/** Ball games — numbers kept comma-separated, split by drawing type. */
-function parseBallCsv(csv) {
+/**
+ * Ball games — numbers kept comma-separated, split by drawing type. `size`
+ * drops rows with the wrong count: if the game dropdown doesn't switch in time
+ * the export is still the previous game's, and from Sep 7 to Nov 7 2026 that
+ * saved Fantasy 5 numbers into Lotto 47 (61 drawings, cleaned up below).
+ */
+function parseBallCsv(csv, size) {
   const regular = [];
   const double = [];
   for (const line of (csv || '').split('\n').slice(1)) {
     const m = line.match(/^"(\d\d)\/(\d\d)\/(\d{4})","([\d,]+)","([^"]*)"/);
     if (!m) continue;
+    if (size && m[4].split(',').length !== size) continue;
     const row = [`${m[3]}-${m[1]}-${m[2]}`, m[4]];
     if (/DOUBLE/i.test(m[5])) double.push(row);
     else regular.push(row);
@@ -261,6 +267,18 @@ async function pullRange(page, start, end) {
   await page.waitForTimeout(4000);
 
   let added = 0;
+  // Clean any ball-game rows with the wrong count of numbers (see parseBallCsv).
+  for (const bg of BALL_GAMES) {
+    for (const key of [bg.regular, bg.double]) {
+      const rows = data.streams[key] || [];
+      const keep = rows.filter((r) => String(r[1]).split(',').length === bg.size);
+      if (keep.length !== rows.length) {
+        console.log(`${key}: removed ${rows.length - keep.length} rows with the wrong count of numbers`);
+        data.streams[key] = keep;
+        added += rows.length - keep.length;
+      }
+    }
+  }
   // ── Today's drawings, straight off each game page ──────────────────────────
   const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Detroit' }));
   let winnersChanged = false;
@@ -375,7 +393,8 @@ async function pullRange(page, start, end) {
     try {
       await selectGame(page, bg.label);
       const csv = await pullRange(page, fmt(from), fmt(today));
-      const { regular, double } = parseBallCsv(csv);
+      const { regular, double } = parseBallCsv(csv, bg.size);
+      if (!regular.length && !double.length) console.log(`${bg.label}: export had no ${bg.size}-number rows — wrong game showing, skipped`);
 
       for (const [key, fresh] of [[bg.regular, regular], [bg.double, double]]) {
         if (!fresh.length) continue;
@@ -406,7 +425,7 @@ async function pullRange(page, start, end) {
       for (let y = 2010; y <= today.getFullYear(); y++) {
         try {
           const csv = await pullRange(page, `01/01/${y}`, `12/31/${y}`);
-          const { regular, double } = parseBallCsv(csv);
+          const { regular, double } = parseBallCsv(csv, bg.size);
           for (const [key, fresh] of [[bg.regular, regular], [bg.double, double]]) {
             if (!fresh.length) continue;
             const existing = data.streams[key] || [];
