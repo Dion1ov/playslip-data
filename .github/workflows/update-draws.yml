@@ -11,6 +11,11 @@ on:
     - cron: '5 0 * * *'     # 8:05pm EDT  ( 7:05pm EST)
     - cron: '5 1 * * *'     # 9:05pm EDT  ( 8:05pm EST)  — EST catch-up / EDT retry
   workflow_dispatch:        # lets you run it by hand from the Actions tab
+    inputs:
+      backfill:
+        description: 'Pull Fantasy 5 / Lotto 47 history back to 2010 (one time)'
+        type: boolean
+        default: false
 
   # GitHub's scheduler has never once fired for this repo — 20 days, 7 runs,
   # all manual. The `schedule:` block above is kept in case it ever starts
@@ -55,6 +60,8 @@ jobs:
           # {"event_type":"scrape","client_payload":{"watch":true}} — the bot
           # then polls the game pages every 45 s until the numbers post.
           WATCH: ${{ github.event.client_payload.watch && '1' || '' }}
+          # Run by hand with backfill = true to pull older Fantasy 5 / Lotto 47 years.
+          BACKFILL: ${{ github.event.inputs.backfill == 'true' && '1' || '' }}
 
       - name: Commit if changed
         run: |
