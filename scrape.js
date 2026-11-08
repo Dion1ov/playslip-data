@@ -396,6 +396,35 @@ async function pullRange(page, start, end) {
     }
   }
 
+  // ── One-time history backfill for Fantasy 5 / Lotto 47 (BACKFILL=1) ─────────
+  // Run by hand: Actions → Update Michigan draw results → Run workflow →
+  // backfill = true. Pulls each year since 2010 so the Ball Lab has the same
+  // depth as Daily 3 / 4. Safe to re-run: rows are merged on date + numbers.
+  if (process.env.BACKFILL === '1') {
+    for (const bg of BALL_GAMES) {
+      try { await selectGame(page, bg.label); } catch (err) { console.error(`${bg.label}: backfill select FAILED — ${err.message}`); continue; }
+      for (let y = 2010; y <= today.getFullYear(); y++) {
+        try {
+          const csv = await pullRange(page, `01/01/${y}`, `12/31/${y}`);
+          const { regular, double } = parseBallCsv(csv);
+          for (const [key, fresh] of [[bg.regular, regular], [bg.double, double]]) {
+            if (!fresh.length) continue;
+            const existing = data.streams[key] || [];
+            const seen = new Set(existing.map((r) => `${r[0]}|${r[1]}`));
+            const newRows = fresh.filter((r) => !seen.has(`${r[0]}|${r[1]}`));
+            if (newRows.length) {
+              data.streams[key] = [...newRows, ...existing].sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0));
+              added += newRows.length;
+            }
+            console.log(`BACKFILL ${key} ${y}: ${fresh.length} rows, +${newRows.length} new`);
+          }
+        } catch (err) {
+          console.error(`BACKFILL ${bg.label} ${y}: FAILED — ${err.message}`);
+        }
+      }
+    }
+  }
+
   await sameDayPass();
   }
 
