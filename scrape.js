@@ -436,6 +436,8 @@ async function pullRange(page, start, end) {
       const m = document.body.innerText.match(/Select Game\s*\n\s*([^\n]+)/);
       return m ? m[1].trim() : '';
     });
+    // The export leaves out its end date, so each year runs to Jan 1 of the
+    // next and the year filter drops that extra day.
     const key2 = (r) => `${r[0]}|${r[1]}`;
     for (const stream of STREAMS.filter((s) => /^d[34]/.test(s.key))) {
       const len = stream.key.startsWith('d3') ? 3 : 4;
@@ -445,7 +447,7 @@ async function pullRange(page, start, end) {
       for (let tries = 0; tries < 2 && !gated; tries++) {
         try {
           await selectGame(page, stream.label);
-          const pulled = parseCsv(await pullRange(page, '01/01/2010', '12/31/2010'))
+          const pulled = parseCsv(await pullRange(page, '01/01/2010', '01/01/2011'))
             .filter((r) => r[0].startsWith('2010-') && r[1].length === len);
           const same = pulled.filter((r) => have2010.has(key2(r))).length;
           gated = have2010.size > 300 && same === have2010.size && same === pulled.length;
@@ -457,7 +459,7 @@ async function pullRange(page, start, end) {
       if (!gated) { console.error(`DIGITS ${stream.key}: 2010 did not match — skipped, nothing written`); continue; }
       for (let y = 2009; y >= fromY; y--) {
         try {
-          const fresh = parseCsv(await pullRange(page, `01/01/${y}`, `12/31/${y}`))
+          const fresh = parseCsv(await pullRange(page, `01/01/${y}`, `01/01/${y + 1}`))
             .filter((r) => r[0].startsWith(`${y}-`) && r[1].length === len);
           const existing = data.streams[stream.key] || [];
           const seen = new Set(existing.map(key2));
