@@ -415,6 +415,55 @@ async function pullRange(page, start, end) {
     }
   }
 
+  // ── Daily 3 / Daily 4 history backfill (DIGIT_BACKFILL=1) ──────────────────
+  // Run by hand: Actions → Update Michigan draw results → Run workflow →
+  // backfill_digits = true. Pulls every year from DIGITS_FROM (default 1975)
+  // through 2010 for Daily 3 and Daily 4, midday and evening. Three guards so
+  // nothing lands in the wrong stream (the Lotto 47 lesson):
+  //   1. the page must show the right game before each pull (re-selects once);
+  //   2. rows must be the right length (3 or 4 digits) and from the year asked;
+  //   3. 2010 is pulled again and compared with what we already have — the log
+  //      prints MATCH or MISMATCH so the older years can be trusted.
+  if (process.env.DIGIT_BACKFILL === '1') {
+    const fromY = Number(process.env.DIGITS_FROM || 1975);
+    const shownGame = () => page.evaluate(() => {
+      const m = document.body.innerText.match(/Select Game\s*\n\s*([^\n]+)/);
+      return m ? m[1].trim() : '';
+    });
+    for (const stream of STREAMS.filter((s) => /^d[34]/.test(s.key))) {
+      const len = stream.key.startsWith('d3') ? 3 : 4;
+      let ok = false;
+      for (let tries = 0; tries < 2 && !ok; tries++) {
+        try { await selectGame(page, stream.label); } catch (err) { console.error(`DIGITS ${stream.key}: select failed — ${err.message}`); }
+        ok = (await shownGame()) === stream.label;
+      }
+      if (!ok) { console.error(`DIGITS ${stream.key}: page never showed "${stream.label}" — skipped`); continue; }
+      for (let y = fromY; y <= 2010; y++) {
+        try {
+          if ((await shownGame()) !== stream.label) { console.error(`DIGITS ${stream.key} ${y}: game changed — skipped`); continue; }
+          const csv = await pullRange(page, `01/01/${y}`, `12/31/${y}`);
+          const fresh = parseCsv(csv).filter((r) => r[0].startsWith(`${y}-`) && r[1].length === len);
+          const existing = data.streams[stream.key] || [];
+          if (y === 2010) {
+            const have = new Set(existing.filter((r) => r[0].startsWith('2010-')).map((r) => `${r[0]}|${r[1]}`));
+            const same = fresh.filter((r) => have.has(`${r[0]}|${r[1]}`)).length;
+            console.log(`DIGITS CHECK ${stream.key} 2010: ${same === have.size && same === fresh.length ? 'MATCH' : 'MISMATCH'} (pulled ${fresh.length}, had ${have.size}, same ${same})`);
+            continue;
+          }
+          const seen = new Set(existing.map((r) => `${r[0]}|${r[1]}`));
+          const newRows = fresh.filter((r) => !seen.has(`${r[0]}|${r[1]}`));
+          if (newRows.length) {
+            data.streams[stream.key] = [...newRows, ...existing].sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0));
+            added += newRows.length;
+          }
+          console.log(`DIGITS ${stream.key} ${y}: ${fresh.length} rows, +${newRows.length} new`);
+        } catch (err) {
+          console.log(`DIGITS ${stream.key} ${y}: none (${err.message})`);
+        }
+      }
+    }
+  }
+
   // ── One-time history backfill for Fantasy 5 / Lotto 47 (BACKFILL=1) ─────────
   // Run by hand: Actions → Update Michigan draw results → Run workflow →
   // backfill = true. Pulls each year since 2010 so the Ball Lab has the same
@@ -467,7 +516,7 @@ async function pullRange(page, start, end) {
   // otherwise be dated tomorrow.
   data.generated = new Date()
     .toLocaleDateString('en-CA', { timeZone: 'America/Detroit' });
-  data.coverage = `2010-01-01 to ${newest}`;
+  data.coverage = `${['d3e', 'd3m', 'd4e', 'd4m'].map((k) => (data.streams[k] || []).slice(-1)[0]?.[0]).filter(Boolean).sort()[0] || '2010-01-01'} to ${newest}`;
   fs.writeFileSync(DATA_PATH, JSON.stringify(data));
   console.log(`Wrote ${added} new draws${winnersChanged ? ' + winner counts' : ''}. Latest draw: ${newest}`);
 })().catch((err) => {
