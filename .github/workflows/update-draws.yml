@@ -16,6 +16,10 @@ on:
         description: 'Pull Fantasy 5 / Lotto 47 history back to 2010 (one time)'
         type: boolean
         default: false
+      backfill_digits:
+        description: 'Pull Daily 3 / Daily 4 history back as far as Michigan has it (one time)'
+        type: boolean
+        default: false
 
   # GitHub's scheduler has never once fired for this repo — 20 days, 7 runs,
   # all manual. The `schedule:` block above is kept in case it ever starts
@@ -39,7 +43,8 @@ jobs:
   update:
     runs-on: ubuntu-latest
     # A watch run waits up to 35 min for the drawing to post.
-    timeout-minutes: 45
+    # A Daily 3/4 history backfill pulls ~140 year-ranges, so allow 2 hours.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -62,6 +67,8 @@ jobs:
           WATCH: ${{ github.event.client_payload.watch && '1' || '' }}
           # Run by hand with backfill = true to pull older Fantasy 5 / Lotto 47 years.
           BACKFILL: ${{ github.event.inputs.backfill == 'true' && '1' || '' }}
+          # Run by hand with backfill_digits = true to pull older Daily 3 / Daily 4 years.
+          DIGIT_BACKFILL: ${{ github.event.inputs.backfill_digits == 'true' && '1' || '' }}
 
       - name: Commit if changed
         run: |
