@@ -426,34 +426,44 @@ async function pullRange(page, start, end) {
   //      prints MATCH or MISMATCH so the older years can be trusted.
   if (process.env.DIGIT_BACKFILL === '1') {
     const fromY = Number(process.env.DIGITS_FROM || 1975);
+    // What the page says is selected — logged only. The real proof is the
+    // 2010 gate below: a stream's older years are pulled only after its 2010
+    // export matches, draw for draw, the 2010 we already have. A wrong game
+    // (or midday/evening mix-up) can't pass that.
     const shownGame = () => page.evaluate(() => {
+      const sv = document.querySelector('[class*="singleValue"], [class*="single-value"]');
+      if (sv) return sv.textContent.trim();
       const m = document.body.innerText.match(/Select Game\s*\n\s*([^\n]+)/);
       return m ? m[1].trim() : '';
     });
+    const key2 = (r) => `${r[0]}|${r[1]}`;
     for (const stream of STREAMS.filter((s) => /^d[34]/.test(s.key))) {
       const len = stream.key.startsWith('d3') ? 3 : 4;
-      let ok = false;
-      for (let tries = 0; tries < 2 && !ok; tries++) {
-        try { await selectGame(page, stream.label); } catch (err) { console.error(`DIGITS ${stream.key}: select failed — ${err.message}`); }
-        ok = (await shownGame()) === stream.label;
-      }
-      if (!ok) { console.error(`DIGITS ${stream.key}: page never showed "${stream.label}" — skipped`); continue; }
-      for (let y = fromY; y <= 2010; y++) {
+      const existing0 = data.streams[stream.key] || [];
+      const have2010 = new Set(existing0.filter((r) => r[0].startsWith('2010-')).map(key2));
+      let gated = false;
+      for (let tries = 0; tries < 2 && !gated; tries++) {
         try {
-          if ((await shownGame()) !== stream.label) { console.error(`DIGITS ${stream.key} ${y}: game changed — skipped`); continue; }
-          const csv = await pullRange(page, `01/01/${y}`, `12/31/${y}`);
-          const fresh = parseCsv(csv).filter((r) => r[0].startsWith(`${y}-`) && r[1].length === len);
+          await selectGame(page, stream.label);
+          const pulled = parseCsv(await pullRange(page, '01/01/2010', '12/31/2010'))
+            .filter((r) => r[0].startsWith('2010-') && r[1].length === len);
+          const same = pulled.filter((r) => have2010.has(key2(r))).length;
+          gated = have2010.size > 300 && same === have2010.size && same === pulled.length;
+          console.log(`DIGITS CHECK ${stream.key} 2010: ${gated ? 'MATCH' : 'MISMATCH'} (pulled ${pulled.length}, had ${have2010.size}, same ${same}; page shows "${await shownGame()}")`);
+        } catch (err) {
+          console.error(`DIGITS CHECK ${stream.key}: ${err.message}`);
+        }
+      }
+      if (!gated) { console.error(`DIGITS ${stream.key}: 2010 did not match — skipped, nothing written`); continue; }
+      for (let y = 2009; y >= fromY; y--) {
+        try {
+          const fresh = parseCsv(await pullRange(page, `01/01/${y}`, `12/31/${y}`))
+            .filter((r) => r[0].startsWith(`${y}-`) && r[1].length === len);
           const existing = data.streams[stream.key] || [];
-          if (y === 2010) {
-            const have = new Set(existing.filter((r) => r[0].startsWith('2010-')).map((r) => `${r[0]}|${r[1]}`));
-            const same = fresh.filter((r) => have.has(`${r[0]}|${r[1]}`)).length;
-            console.log(`DIGITS CHECK ${stream.key} 2010: ${same === have.size && same === fresh.length ? 'MATCH' : 'MISMATCH'} (pulled ${fresh.length}, had ${have.size}, same ${same})`);
-            continue;
-          }
-          const seen = new Set(existing.map((r) => `${r[0]}|${r[1]}`));
-          const newRows = fresh.filter((r) => !seen.has(`${r[0]}|${r[1]}`));
+          const seen = new Set(existing.map(key2));
+          const newRows = fresh.filter((r) => !seen.has(key2(r)));
           if (newRows.length) {
-            data.streams[stream.key] = [...newRows, ...existing].sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0));
+            data.streams[stream.key] = [...existing, ...newRows].sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0));
             added += newRows.length;
           }
           console.log(`DIGITS ${stream.key} ${y}: ${fresh.length} rows, +${newRows.length} new`);
