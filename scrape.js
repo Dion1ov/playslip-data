@@ -476,30 +476,48 @@ async function pullRange(page, start, end) {
     }
   }
 
-  // ── One-time history backfill for Fantasy 5 / Lotto 47 (BACKFILL=1) ─────────
+  // ── Fantasy 5 / Lotto 47 history backfill (BACKFILL=1) ────────────────
   // Run by hand: Actions → Update Michigan draw results → Run workflow →
-  // backfill = true. Pulls each year since 2010 so the Ball Lab has the same
-  // depth as Daily 3 / 4. Safe to re-run: rows are merged on date + numbers.
+  // backfill = true. Same guards as the Daily 3/4 backfill: each game's 2010
+  // export must match what we already have, draw for draw, before any older
+  // year is written; each year runs to Jan 1 of the next (the export leaves out
+  // its end date) and only rows from that year are kept. Then it walks back
+  // from 2009 to BALL_FROM (default 1985). Safe to re-run.
   if (process.env.BACKFILL === '1') {
+    const fromY = Number(process.env.BALL_FROM || 1985);
+    const key2 = (r) => `${r[0]}|${r[1]}`;
     for (const bg of BALL_GAMES) {
-      try { await selectGame(page, bg.label); } catch (err) { console.error(`${bg.label}: backfill select FAILED — ${err.message}`); continue; }
-      for (let y = 2010; y <= today.getFullYear(); y++) {
+      const have2010 = new Set((data.streams[bg.regular] || []).filter((r) => r[0].startsWith('2010-')).map(key2));
+      let gated = false;
+      for (let tries = 0; tries < 2 && !gated; tries++) {
         try {
-          const csv = await pullRange(page, `01/01/${y}`, `12/31/${y}`);
-          const { regular, double } = parseBallCsv(csv, bg.size);
-          for (const [key, fresh] of [[bg.regular, regular], [bg.double, double]]) {
-            if (!fresh.length) continue;
+          await selectGame(page, bg.label);
+          const { regular } = parseBallCsv(await pullRange(page, '01/01/2010', '01/01/2011'), bg.size);
+          const pulled = regular.filter((r) => r[0].startsWith('2010-'));
+          const same = pulled.filter((r) => have2010.has(key2(r))).length;
+          gated = have2010.size > 50 && same === have2010.size && same === pulled.length;
+          console.log(`BACKFILL CHECK ${bg.regular} 2010: ${gated ? 'MATCH' : 'MISMATCH'} (pulled ${pulled.length}, had ${have2010.size}, same ${same})`);
+        } catch (err) {
+          console.error(`BACKFILL CHECK ${bg.label}: ${err.message}`);
+        }
+      }
+      if (!gated) { console.error(`BACKFILL ${bg.label}: 2010 did not match — skipped, nothing written`); continue; }
+      for (let y = 2009; y >= fromY; y--) {
+        try {
+          const { regular, double } = parseBallCsv(await pullRange(page, `01/01/${y}`, `01/01/${y + 1}`), bg.size);
+          for (const [key, rows] of [[bg.regular, regular], [bg.double, double]]) {
+            const fresh = rows.filter((r) => r[0].startsWith(`${y}-`));
             const existing = data.streams[key] || [];
-            const seen = new Set(existing.map((r) => `${r[0]}|${r[1]}`));
-            const newRows = fresh.filter((r) => !seen.has(`${r[0]}|${r[1]}`));
+            const seen = new Set(existing.map(key2));
+            const newRows = fresh.filter((r) => !seen.has(key2(r)));
             if (newRows.length) {
-              data.streams[key] = [...newRows, ...existing].sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0));
+              data.streams[key] = [...existing, ...newRows].sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0));
               added += newRows.length;
             }
-            console.log(`BACKFILL ${key} ${y}: ${fresh.length} rows, +${newRows.length} new`);
+            if (fresh.length || key === bg.regular) console.log(`BACKFILL ${key} ${y}: ${fresh.length} rows, +${newRows.length} new`);
           }
         } catch (err) {
-          console.error(`BACKFILL ${bg.label} ${y}: FAILED — ${err.message}`);
+          console.log(`BACKFILL ${bg.label} ${y}: none (${err.message})`);
         }
       }
     }
