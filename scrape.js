@@ -127,6 +127,110 @@ function parseShownDate(text, nowET) {
   return `${year}-${String(month + 1).padStart(2, '0')}-${String(Number(m[2])).padStart(2, '0')}`;
 }
 
+/**
+ * Michigan's new site (Nov 23 2026). The old Past Results export and the old
+ * game pages are gone (404 / no matching elements). The new Past Results page
+ * lists the last 7 days for a game — today's drawings included, minutes after
+ * they're drawn — as text:
+ *
+ *   Nov 23, 2026 · Midday            (digit games)
+ *   7 / 3 / 5
+ *   Winning numbers: 7, 3, 5
+ *
+ *   Nov 22, 2026                     (ball games)
+ *   21 / 24 / …
+ *   Regular Drawing                  (or Double Play Drawing)
+ *   Winning numbers: 21, 24, 27, 28, 34
+ *
+ * Each row has a "Show payout table for <date>" button that opens a
+ * "Midday Drawing" / "Evening Drawing" winners table (Win Conditions /
+ * Winners / Prize), same columns as before.
+ */
+const PAST_URL = (slug) => `https://www.michiganlottery.com/number-tools?SELECTED_GAME=${slug}&SELECTED_TOOL=PAST_RESULTS`;
+const DIGIT_GAMES = [
+  { slug: 'daily-3', mid: 'd3m', eve: 'd3e', digits: 3 },
+  { slug: 'daily-4', mid: 'd4m', eve: 'd4e', digits: 4 },
+  { slug: 'daily-5', mid: 'd5m', eve: 'd5e', digits: 5 },
+];
+const BALL_SLUGS = { 'Fantasy 5': 'fantasy-5', 'Lotto 47': 'classic-lotto-47' };
+const MONTH_IX = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+
+/** Page text → [{ date, time: 'midday'|'evening'|null, kind: 'regular'|'double'|null, nums: [..] }], newest first. */
+function parsePastText(text) {
+  const out = [];
+  let date = null, time = null, kind = null;
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    const d = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{1,2}),\s+(\d{4})(?:\s*[·•\-–]\s*(Midday|Evening))?$/i.exec(line);
+    if (d) {
+      const m = MONTH_IX[d[1].slice(0, 3)[0].toUpperCase() + d[1].slice(1, 3).toLowerCase()];
+      date = `${d[3]}-${String(m).padStart(2, '0')}-${String(Number(d[2])).padStart(2, '0')}`;
+      time = d[4] ? d[4].toLowerCase() : null;
+      kind = null;
+      continue;
+    }
+    if (/^Regular Drawing$/i.test(line)) { kind = 'regular'; continue; }
+    if (/^Double Play Drawing$/i.test(line)) { kind = 'double'; continue; }
+    const w = /^Winning numbers:\s*([\d,\s]+)$/i.exec(line);
+    if (w && date) {
+      out.push({ date, time, kind, nums: w[1].split(',').map((x) => x.trim()).filter(Boolean) });
+      kind = null;
+    }
+  }
+  return out;
+}
+
+/** Opens a game's Past Results page and returns its drawings (last 7 days). */
+async function readPast(page, slug) {
+  await page.goto(PAST_URL(slug), { waitUntil: 'domcontentloaded' });
+  await page.getByText(/Winning numbers:/).first().waitFor({ timeout: 30000 });
+  const text = await page.evaluate(() => (document.querySelector('main') || document.body).innerText);
+  return parsePastText(text);
+}
+
+/**
+ * Winners tables for the newest midday and newest evening drawing on the page
+ * that readPast() just opened. Buttons are in the same order as the drawings.
+ */
+async function readWinners(page, draws) {
+  const want = new Map();   // slot → index of its newest drawing
+  draws.forEach((d, i) => { if (d.time && !want.has(d.time)) want.set(d.time, i); });
+  const result = {};
+  const buttons = page.getByRole('button', { name: /Show payout table for/i });
+  for (const [slot, i] of want) {
+    try {
+      await buttons.nth(i).click();
+      await page.waitForFunction((label) => [...document.querySelectorAll('main table')].some((t) => {
+        let el = t;
+        for (let k = 0; k < 6 && el; k++) { el = el.parentElement; if (el && new RegExp('^' + label + ' Drawing', 'm').test(el.innerText)) return true; }
+        return false;
+      }), slot === 'midday' ? 'Midday' : 'Evening', { timeout: 8000 });
+      const tiers = await page.evaluate((label) => {
+        for (const t of document.querySelectorAll('main table')) {
+          let el = t, ok = false;
+          for (let k = 0; k < 6 && el && !ok; k++) { el = el.parentElement; ok = !!el && new RegExp('^' + label + ' Drawing', 'm').test(el.innerText); }
+          if (!ok) continue;
+          const rows = [];
+          for (const tr of [...t.querySelectorAll('tr')].slice(1)) {
+            const c = [...tr.querySelectorAll('td,th')].map((x) => x.innerText.trim());
+            if (c.length < 3 || !c[0] || c[1] === '') continue;
+            const winners = Number(c[1].replace(/[^\d]/g, ''));
+            const prize = Number(c[2].replace(/[^\d.]/g, ''));
+            if (Number.isFinite(winners)) rows.push([c[0], winners, Number.isFinite(prize) ? prize : 0]);
+          }
+          return rows;
+        }
+        return null;
+      }, slot === 'midday' ? 'Midday' : 'Evening');
+      if (tiers && tiers.length) result[slot] = { date: draws[i].date, tiers };
+      await buttons.nth(i).click().catch(() => {});   // close it again
+    } catch (err) {
+      console.log(`winners ${slot}: not read (${err.message.split('\n')[0]})`);
+    }
+  }
+  return result;
+}
+
 /** Reads today's midday/evening digits off a game page. */
 async function pullToday(page, cfg) {
   await page.goto(cfg.url, { waitUntil: 'domcontentloaded' });
@@ -263,8 +367,11 @@ async function pullRange(page, start, end) {
 
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  await page.goto(URL, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4000);
+  // The old export page (URL) is only opened by the by-hand backfills below.
+  if (process.env.BACKFILL === '1' || process.env.DIGIT_BACKFILL === '1') {
+    await page.goto(URL, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(4000);
+  }
 
   let added = 0;
   // Clean any ball-game rows with the wrong count of numbers (see parseBallCsv).
@@ -283,53 +390,40 @@ async function pullRange(page, start, end) {
   const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Detroit' }));
   let winnersChanged = false;
   async function sameDayPass() {
-    for (const cfg of TODAY_PAGES) {
+    for (const g of DIGIT_GAMES) {
       try {
-        const today = await pullToday(page, cfg);
-        const dateISO = today.date ? parseShownDate(today.date, nowET) : null;
-        if (!dateISO) {
-          console.log(`${cfg.mid}/${cfg.eve}: could not read today's date ("${today.date}")`);
-          continue;
-        }
-
-        for (const [slot, key] of [['midday', cfg.mid], ['evening', cfg.eve]]) {
-          const digits = today[slot];
-          // "Results Pending" before a drawing — nothing to record yet.
-          if (!digits || digits.length !== cfg.digits) continue;
-
+        const draws = (await readPast(page, g.slug)).filter((d) => d.time && d.nums.length === g.digits);
+        if (!draws.length) { console.log(`${g.mid}/${g.eve}: no drawings read from ${g.slug}`); continue; }
+        for (const [slot, key] of [['midday', g.mid], ['evening', g.eve]]) {
+          const fresh = draws.filter((d) => d.time === slot).map((d) => [d.date, d.nums.join('')]);
           const existing = data.streams[key] || [];
-          if (existing.some((r) => r[0] === dateISO)) continue;
-
-          data.streams[key] = [[dateISO, digits], ...existing];
-          added += 1;
-          console.log(`${key}: +1 from game page (${dateISO} ${digits})`);
+          const seen = new Set(existing.map((r) => `${r[0]}|${r[1]}`));
+          const newRows = fresh.filter((r) => !seen.has(`${r[0]}|${r[1]}`));
+          if (!newRows.length) continue;
+          data.streams[key] = [...newRows, ...existing].sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0));
+          added += newRows.length;
+          console.log(`${key}: +${newRows.length} (${newRows.map((r) => `${r[0]} ${r[1]}`).join(', ')})`);
         }
-
         // Winner counts — only the most recent drawing per stream is kept.
-        // A table that totals 0 is a drawing that hasn't happened yet (or
-        // hasn't been tallied), so it never overwrites the last real one.
-        const winnersISO = parseWinnersDate(today.winnersFrom);
-        if (winnersISO) {
-          data.winners = data.winners || {};
-          for (const [slot, key] of [['midday', cfg.mid], ['evening', cfg.eve]]) {
-            const tiers = today.winners && today.winners[slot];
-            if (!tiers || !tiers.length) continue;
-            const total = tiers.reduce((n, t) => n + t[1], 0);
-            if (total === 0) continue;
-            const prev = data.winners[key];
-            const next = { date: winnersISO, total, tiers };
-            if (prev && JSON.stringify(prev) === JSON.stringify(next)) continue;
-            if (prev && prev.date > winnersISO) continue;
-            data.winners[key] = next;
-            winnersChanged = true;
-            console.log(`${key}: winners for ${winnersISO} — ${total} total`);
-          }
-        } else {
-          console.log(`${cfg.mid}/${cfg.eve}: no winners table read ("${today.winnersFrom}")`);
+        // A table that totals 0 hasn't been tallied yet, so it never
+        // overwrites the last real one.
+        const won = await readWinners(page, draws);
+        data.winners = data.winners || {};
+        for (const [slot, key] of [['midday', g.mid], ['evening', g.eve]]) {
+          const w = won[slot];
+          if (!w) continue;
+          const total = w.tiers.reduce((n, t) => n + t[1], 0);
+          if (total === 0) continue;
+          const prev = data.winners[key];
+          const next = { date: w.date, total, tiers: w.tiers };
+          if (prev && JSON.stringify(prev) === JSON.stringify(next)) continue;
+          if (prev && prev.date > w.date) continue;
+          data.winners[key] = next;
+          winnersChanged = true;
+          console.log(`${key}: winners for ${w.date} — ${total} total`);
         }
       } catch (err) {
-        // Best effort — the export pass already ran, so this never blocks a commit.
-        console.error(`${cfg.url}: same-day pass failed — ${err.message}`);
+        console.error(`${g.slug}: FAILED — ${err.message.split('\n')[0]}`);
       }
     }
   }
@@ -359,43 +453,16 @@ async function pullRange(page, start, end) {
 
   if (!WATCH) {
 
-  for (const stream of STREAMS) {
-    try {
-      await selectGame(page, stream.label);
-      const csv = await pullRange(page, fmt(from), fmt(today));
-      const fresh = parseCsv(csv);
-      if (!fresh.length) {
-        console.log(`${stream.key}: no rows returned`);
-        continue;
-      }
-
-      const existing = data.streams[stream.key] || [];
-      // Key on date + digits so twice-daily bonus draws aren't lost
-      const seen = new Set(existing.map((r) => `${r[0]}|${r[1]}`));
-      const newRows = fresh.filter((r) => !seen.has(`${r[0]}|${r[1]}`));
-
-      if (newRows.length) {
-        const merged = [...newRows, ...existing].sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0));
-        data.streams[stream.key] = merged;
-        added += newRows.length;
-        console.log(`${stream.key}: +${newRows.length} new (${newRows.map((r) => r[0]).join(', ')})`);
-      } else {
-        console.log(`${stream.key}: up to date`);
-      }
-    } catch (err) {
-      // One stream failing must not abandon the others
-      console.error(`${stream.key}: FAILED — ${err.message}`);
-    }
-  }
+  // ── Daily 3 / 4 / 5: the new Past Results page (last 7 days) ──────────────
+  await sameDayPass();
 
   // ── Ball games (Fantasy 5, Lotto 47) ───────────────────────────────────────
   for (const bg of BALL_GAMES) {
     try {
-      await selectGame(page, bg.label);
-      const csv = await pullRange(page, fmt(from), fmt(today));
-      const { regular, double } = parseBallCsv(csv, bg.size);
-      if (!regular.length && !double.length) console.log(`${bg.label}: export had no ${bg.size}-number rows — wrong game showing, skipped`);
-
+      const draws = (await readPast(page, BALL_SLUGS[bg.label])).filter((d) => d.nums.length === bg.size);
+      if (!draws.length) { console.log(`${bg.label}: no ${bg.size}-number drawings read — skipped`); continue; }
+      const regular = draws.filter((d) => d.kind !== 'double').map((d) => [d.date, d.nums.map(Number).join(',')]);
+      const double = draws.filter((d) => d.kind === 'double').map((d) => [d.date, d.nums.map(Number).join(',')]);
       for (const [key, fresh] of [[bg.regular, regular], [bg.double, double]]) {
         if (!fresh.length) continue;
         const existing = data.streams[key] || [];
@@ -411,7 +478,7 @@ async function pullRange(page, start, end) {
         }
       }
     } catch (err) {
-      console.error(`${bg.label}: FAILED — ${err.message}`);
+      console.error(`${bg.label}: FAILED — ${err.message.split('\n')[0]}`);
     }
   }
 
@@ -523,7 +590,6 @@ async function pullRange(page, start, end) {
     }
   }
 
-  await sameDayPass();
   }
 
   // Powerball / Mega Millions (not on the Michigan export). Skipped in watch
